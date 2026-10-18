@@ -5,8 +5,13 @@ const BUILD_PLACEHOLDER_URL = "https://placeholder.supabase.co";
 const BUILD_PLACEHOLDER_ANON_KEY = "public-anon-key";
 
 export function getSupabaseUrl() {
-  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-  return raw.replace(/\/+$/, "").replace(/\/rest\/v1$/i, "");
+  let url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  while (url.endsWith("/")) url = url.slice(0, -1);
+  const restSuffix = "/rest/v1";
+  if (url.toLowerCase().endsWith(restSuffix)) {
+    url = url.slice(0, -restSuffix.length);
+  }
+  return url;
 }
 
 export function getSupabaseAnonKey() {

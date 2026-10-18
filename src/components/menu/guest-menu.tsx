@@ -90,7 +90,7 @@ export function GuestMenu({
 
   const total = cartItems.reduce((sum, row) => sum + row.dish.price * row.qty, 0);
 
-  async function placeOrder() {
+  function placeOrder() {
     if (!cartItems.length) return;
     setCart({});
   }

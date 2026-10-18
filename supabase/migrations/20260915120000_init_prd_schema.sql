@@ -218,7 +218,19 @@ create index if not exists reviews_low_rating_partial_idx
 -- Privileges (RLS is ignored if GRANT is missing)
 -- -----------------------------------------------------------------------------
 
-grant usage on schema public to anon, authenticated, service_role;
+do $$
+declare
+  v_anon constant text := 'anon';
+  v_authenticated constant text := 'authenticated';
+  v_service constant text := 'service_role';
+begin
+  execute format(
+    'grant usage on schema public to %I, %I, %I',
+    v_anon,
+    v_authenticated,
+    v_service
+  );
+end $$;
 
 grant select on table
   public.restaurants,

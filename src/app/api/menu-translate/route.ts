@@ -8,41 +8,53 @@ function parseTarget(value: unknown): Target | null {
   return value === "en" || value === "ru" ? value : null;
 }
 
+function translationBag(parsed: unknown) {
+  if (!parsed || typeof parsed !== "object") return null;
+  const root = parsed as Record<string, unknown>;
+  if (root.translations && typeof root.translations === "object") {
+    return root.translations;
+  }
+  return parsed;
+}
+
+function translationsFromRows(bag: unknown) {
+  const translations: Record<string, string> = {};
+  if (!Array.isArray(bag)) return translations;
+  for (const row of bag) {
+    if (!row || typeof row !== "object") continue;
+    const item = row as Record<string, unknown>;
+    const source = String(
+      item.original ?? item.source ?? item.from ?? item.key ?? "",
+    ).trim();
+    const target = String(
+      item.translation ?? item.translated ?? item.target ?? item.to ?? item.value ?? "",
+    ).trim();
+    if (source && target) translations[source] = target;
+  }
+  return translations;
+}
+
+function translationsFromMap(bag: unknown, texts: string[]) {
+  const translations: Record<string, string> = {};
+  if (!bag || typeof bag !== "object") return translations;
+  const record = bag as Record<string, unknown>;
+  for (const text of texts) {
+    const value = record[text];
+    if (typeof value === "string" && value.trim()) {
+      translations[text] = value.trim();
+    }
+  }
+  return translations;
+}
+
 function extractTranslations(
   parsed: unknown,
   texts: string[],
 ): Record<string, string> {
-  const translations: Record<string, string> = {};
-  if (!parsed || typeof parsed !== "object") return translations;
-
-  const root = parsed as Record<string, unknown>;
-  const bag =
-    root.translations && typeof root.translations === "object"
-      ? root.translations
-      : parsed;
-
-  if (Array.isArray(bag)) {
-    for (const row of bag) {
-      if (!row || typeof row !== "object") continue;
-      const item = row as Record<string, unknown>;
-      const source = String(
-        item.original ?? item.source ?? item.from ?? item.key ?? "",
-      ).trim();
-      const target = String(
-        item.translation ?? item.translated ?? item.target ?? item.to ?? item.value ?? "",
-      ).trim();
-      if (source && target) translations[source] = target;
-    }
-  } else if (bag && typeof bag === "object") {
-    for (const text of texts) {
-      const value = (bag as Record<string, unknown>)[text];
-      if (typeof value === "string" && value.trim()) {
-        translations[text] = value.trim();
-      }
-    }
-  }
-
-  return translations;
+  const bag = translationBag(parsed);
+  if (!bag) return {};
+  if (Array.isArray(bag)) return translationsFromRows(bag);
+  return translationsFromMap(bag, texts);
 }
 
 async function translateChunk(

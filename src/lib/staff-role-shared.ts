@@ -28,8 +28,15 @@ export function homePathForRole(role: StaffRole | null | undefined) {
   return role === "waiter" ? "/admin/kitchen" : "/admin";
 }
 
+function trimTrailingSlashes(value: string) {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return value.slice(0, end);
+}
+
 function normalizeAdminPath(pathname: string) {
-  const path = (pathname.split("?")[0] || "/admin").replace(/\/+$/, "") || "/admin";
+  const path =
+    trimTrailingSlashes(pathname.split("?")[0] || "/admin") || "/admin";
   if (path === "/admin/overview") return "/admin";
   return path;
 }

@@ -101,8 +101,8 @@ function kindOfDish(
 
 function hashSeed(value: string) {
   let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  for (const char of value) {
+    hash = Math.trunc(hash * 31 + (char.codePointAt(0) ?? 0));
   }
   return Math.abs(hash);
 }
@@ -135,6 +135,73 @@ function drinkHintsForAnchor(anchorName: string, categoryName: string) {
 
 const KIND_ORDER: CrossSellKind[] = ["drink", "side", "dessert"];
 
+function cartContext(
+  dishes: CrossSellDish[],
+  categories: CategoryRef[],
+  inCart: Set<string>,
+) {
+  const categoryById = new Map(categories.map((row) => [row.id, row.name]));
+  const cartKinds = new Set<CrossSellKind>();
+  let hasAnchor = false;
+  let hints: string[] = [];
+  for (const dish of dishes) {
+    if (!inCart.has(dish.id)) continue;
+    const category = categoryById.get(dish.category_id) ?? "";
+    const kind = companionKind(category);
+    if (kind) cartKinds.add(kind);
+    if (isAnchorCategory(category)) {
+      hasAnchor = true;
+      if (!hints.length) hints = drinkHintsForAnchor(dish.name, category);
+    }
+  }
+  return { cartKinds, hasAnchor, hints };
+}
+
+function sortCompanions(
+  dishes: CrossSellDish[],
+  kind: CrossSellKind,
+  hints: string[],
+  seedValue: number,
+) {
+  const sorted = [...dishes].sort((left, right) => {
+    const imageDelta =
+      Number(Boolean(right.image_url?.trim())) -
+      Number(Boolean(left.image_url?.trim()));
+    if (imageDelta) return imageDelta;
+    if (kind === "drink") {
+      const boost = drinkBoost(right.name, hints) - drinkBoost(left.name, hints);
+      if (boost) return boost;
+    }
+    return left.price - right.price || left.name.localeCompare(right.name);
+  });
+  return rotate(sorted, seedValue);
+}
+
+function pickFromKinds(
+  fillOrder: CrossSellKind[],
+  byKind: Record<CrossSellKind, CrossSellDish[]>,
+  limit: number,
+) {
+  const picked: CrossSellDish[] = [];
+  const used = new Set<string>();
+  for (const kind of fillOrder) {
+    if (picked.length >= limit) break;
+    const next = byKind[kind].find((dish) => !used.has(dish.id));
+    if (!next) continue;
+    used.add(next.id);
+    picked.push(next);
+  }
+  for (const kind of fillOrder) {
+    for (const dish of byKind[kind]) {
+      if (picked.length >= limit) break;
+      if (used.has(dish.id)) continue;
+      used.add(dish.id);
+      picked.push(dish);
+    }
+  }
+  return picked.slice(0, limit);
+}
+
 export function pickCrossSells({
   dishes,
   categories,
@@ -149,36 +216,16 @@ export function pickCrossSells({
   limit?: number;
 }): CrossSellDish[] {
   const inCart = new Set(cartIds);
-  const categoryById = new Map(categories.map((row) => [row.id, row.name]));
-  const cartKinds = new Set<CrossSellKind>();
-  let hasAnchor = false;
-  let hints: string[] = [];
-
-  for (const dish of dishes) {
-    if (!inCart.has(dish.id)) continue;
-    const category = categoryById.get(dish.category_id) ?? "";
-    const kind = companionKind(category);
-    if (kind) cartKinds.add(kind);
-    if (isAnchorCategory(category)) {
-      hasAnchor = true;
-      if (!hints.length) hints = drinkHintsForAnchor(dish.name, category);
-    }
-  }
-
+  const { cartKinds, hasAnchor, hints } = cartContext(dishes, categories, inCart);
   if (!hasAnchor) return [];
-
-  const candidates = dishes.filter((dish) => {
-    if (!dish.is_available || inCart.has(dish.id)) return false;
-    return kindOfDish(dish, categories) !== null;
-  });
 
   const byKind: Record<CrossSellKind, CrossSellDish[]> = {
     drink: [],
     side: [],
     dessert: [],
   };
-
-  for (const dish of candidates) {
+  for (const dish of dishes) {
+    if (!dish.is_available || inCart.has(dish.id)) continue;
     const kind = kindOfDish(dish, categories);
     if (!kind) continue;
     byKind[kind].push(dish);
@@ -186,42 +233,13 @@ export function pickCrossSells({
 
   const seedValue = hashSeed(seed);
   for (const kind of KIND_ORDER) {
-    byKind[kind].sort((left, right) => {
-      const imageDelta =
-        Number(Boolean(right.image_url?.trim())) -
-        Number(Boolean(left.image_url?.trim()));
-      if (imageDelta) return imageDelta;
-      if (kind === "drink") {
-        const boost =
-          drinkBoost(right.name, hints) - drinkBoost(left.name, hints);
-        if (boost) return boost;
-      }
-      return left.price - right.price || left.name.localeCompare(right.name);
-    });
-    byKind[kind] = rotate(byKind[kind], seedValue);
+    byKind[kind] = sortCompanions(byKind[kind], kind, hints, seedValue);
   }
 
   const missing = KIND_ORDER.filter((kind) => !cartKinds.has(kind));
-  const fillOrder = [...missing, ...KIND_ORDER.filter((kind) => cartKinds.has(kind))];
-  const picked: CrossSellDish[] = [];
-  const used = new Set<string>();
-
-  for (const kind of fillOrder) {
-    if (picked.length >= limit) break;
-    const next = byKind[kind].find((dish) => !used.has(dish.id));
-    if (!next) continue;
-    used.add(next.id);
-    picked.push(next);
-  }
-
-  for (const kind of fillOrder) {
-    for (const dish of byKind[kind]) {
-      if (picked.length >= limit) break;
-      if (used.has(dish.id)) continue;
-      used.add(dish.id);
-      picked.push(dish);
-    }
-  }
-
-  return picked.slice(0, limit);
+  const fillOrder = [
+    ...missing,
+    ...KIND_ORDER.filter((kind) => cartKinds.has(kind)),
+  ];
+  return pickFromKinds(fillOrder, byKind, limit);
 }

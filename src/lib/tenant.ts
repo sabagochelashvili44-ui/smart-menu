@@ -337,19 +337,43 @@ export async function getFirstActiveRestaurant() {
   }
 }
 
+function emptyTenantAccess() {
+  return {
+    user: null,
+    restaurant: null,
+    isSuperAdmin: false as const,
+    isRestaurantManager: false as const,
+    viewingAs: null,
+    staffRole: null,
+  };
+}
+
+async function restaurantForAccess(user: User, isSuperAdmin: boolean) {
+  if (isSuperAdmin) {
+    const viewAsId = await readViewAsRestaurantId();
+    const viewingAs = viewAsId ? await loadRestaurantById(viewAsId) : null;
+    return { restaurant: viewingAs, viewingAs };
+  }
+  let restaurant: AdminRestaurant | null = null;
+  try {
+    restaurant = await resolveRestaurantForUser(user);
+  } catch {
+    restaurant = null;
+  }
+  if (!restaurant) {
+    try {
+      restaurant = await resolveRestaurantFromSession();
+    } catch {
+      restaurant = null;
+    }
+  }
+  return { restaurant, viewingAs: null as AdminRestaurant | null };
+}
+
 export const requireTenantRestaurant = cache(async () => {
   try {
     const user = await getSessionUser();
-    if (!user) {
-      return {
-        user: null,
-        restaurant: null,
-        isSuperAdmin: false as const,
-        isRestaurantManager: false as const,
-        viewingAs: null,
-        staffRole: null,
-      };
-    }
+    if (!user) return emptyTenantAccess();
 
     let isSuperAdmin = false;
     try {
@@ -358,33 +382,7 @@ export const requireTenantRestaurant = cache(async () => {
       isSuperAdmin = false;
     }
 
-    let restaurant: AdminRestaurant | null = null;
-    let viewingAs: AdminRestaurant | null = null;
-
-    if (isSuperAdmin) {
-      const viewAsId = await readViewAsRestaurantId();
-      if (viewAsId) {
-        viewingAs = await loadRestaurantById(viewAsId);
-      }
-      restaurant = viewingAs;
-    } else {
-      try {
-        restaurant = await resolveRestaurantForUser(user);
-      } catch {
-        restaurant = null;
-      }
-
-      if (!restaurant) {
-        try {
-          restaurant = await resolveRestaurantFromSession();
-        } catch {
-          restaurant = null;
-        }
-      }
-    }
-
-    const isRestaurantManager = Boolean(restaurant) && !isSuperAdmin;
-
+    const { restaurant, viewingAs } = await restaurantForAccess(user, isSuperAdmin);
     const staffRole = restaurant
       ? await resolveStaffRole({
           email: user.email,
@@ -398,19 +396,12 @@ export const requireTenantRestaurant = cache(async () => {
       user,
       restaurant,
       isSuperAdmin,
-      isRestaurantManager,
+      isRestaurantManager: Boolean(restaurant) && !isSuperAdmin,
       viewingAs,
       staffRole,
     };
   } catch {
-    return {
-      user: null,
-      restaurant: null,
-      isSuperAdmin: false as const,
-      isRestaurantManager: false as const,
-      viewingAs: null,
-      staffRole: null,
-    };
+    return emptyTenantAccess();
   }
 });
 

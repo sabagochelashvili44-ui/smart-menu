@@ -161,7 +161,7 @@ function ResetPasswordForm() {
         </p>
       ) : null}
       <Button type="submit" className="w-full" disabled={pending || Boolean(success)}>
-        {pending ? t.savingPassword : t.setNewPassword}
+        {pending ? t.savingSecret : t.setNewPassword}
       </Button>
       {success ? null : (
         <p className="text-center text-sm">

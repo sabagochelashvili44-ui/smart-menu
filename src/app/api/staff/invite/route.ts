@@ -1,4 +1,5 @@
 import { getPublicAppUrl } from "@/lib/app-url";
+import { errorMessage } from "@/lib/http-error";
 import { normalizeStaffEmail } from "@/lib/staff-role-shared";
 import { createSupabaseAdminClient } from "@/lib/supabaseAdmin";
 import { requireTenantApi } from "@/lib/tenant";
@@ -52,6 +53,33 @@ function inviteHtml(roleKa: string, restaurantName: string, registerUrl: string)
 </html>`;
 }
 
+async function upsertStaffRow(
+  restaurantId: string,
+  email: string,
+  role: "manager" | "waiter",
+) {
+  const supabase = createSupabaseAdminClient();
+  const existing = await supabase
+    .from("restaurant_staff")
+    .select("id")
+    .eq("restaurant_id", restaurantId)
+    .ilike("email", email)
+    .maybeSingle();
+
+  if (existing.data?.id) {
+    return supabase
+      .from("restaurant_staff")
+      .update({ email, role })
+      .eq("id", existing.data.id)
+      .eq("restaurant_id", restaurantId);
+  }
+  return supabase.from("restaurant_staff").insert({
+    restaurant_id: restaurantId,
+    email,
+    role,
+  });
+}
+
 export async function POST(request: Request) {
   const tenant = await requireTenantApi(["owner"]);
   if (!tenant.ok) return tenant.response;
@@ -85,32 +113,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const supabase = createSupabaseAdminClient();
-    const existing = await supabase
-      .from("restaurant_staff")
-      .select("id")
-      .eq("restaurant_id", tenant.restaurant.id)
-      .ilike("email", email)
-      .maybeSingle();
-
-    if (existing.data?.id) {
-      const { error } = await supabase
-        .from("restaurant_staff")
-        .update({ email, role })
-        .eq("id", existing.data.id)
-        .eq("restaurant_id", tenant.restaurant.id);
-      if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
-      }
-    } else {
-      const { error } = await supabase.from("restaurant_staff").insert({
-        restaurant_id: tenant.restaurant.id,
-        email,
-        role,
-      });
-      if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
-      }
+    const { error } = await upsertStaffRow(tenant.restaurant.id, email, role);
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
     const resend = new Resend(apiKey);
@@ -130,15 +135,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Resend error:", error);
-    const message =
-      error instanceof Error
-        ? error.message
-        : error &&
-            typeof error === "object" &&
-            "message" in error &&
-            typeof error.message === "string"
-          ? error.message
-          : String(error);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
   }
 }

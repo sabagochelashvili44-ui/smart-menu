@@ -16,6 +16,7 @@ import {
   restaurantLogo,
   slugifyRestaurant,
 } from "@/lib/restaurant-brand";
+import { omitKeys } from "@/lib/object-omit";
 import { toShiftNote, type ShiftNote } from "@/lib/shift-notes";
 import { selectWaiterCalls } from "@/lib/waiter-calls-query";
 import {
@@ -388,8 +389,7 @@ export async function saveAdminDish(input: DishInput) {
 
   let result = await write(payload).select(DISH_COLUMNS).maybeSingle();
   if (result.error && /restaurant_id/i.test(result.error.message)) {
-    const { restaurant_id: _rid, ...withoutRestaurant } = payload;
-    void _rid;
+    const withoutRestaurant = omitKeys(payload, ["restaurant_id"]);
     result = await (input.id
       ? supabase.from("dishes").update(withoutRestaurant).eq("id", input.id)
       : supabase.from("dishes").insert({ ...withoutRestaurant, margin_score: 5 })
@@ -398,9 +398,10 @@ export async function saveAdminDish(input: DishInput) {
       .maybeSingle();
   }
   if (result.error && /ingredients/i.test(result.error.message)) {
-    const { ingredients: _ing, restaurant_id: _rid, ...withoutIngredients } = payload;
-    void _ing;
-    void _rid;
+    const withoutIngredients = omitKeys(payload, [
+      "ingredients",
+      "restaurant_id",
+    ]);
     result = await write(withoutIngredients)
       .select(DISH_COLUMNS_CORE)
       .maybeSingle();
@@ -631,6 +632,88 @@ export async function loadAdminBranding() {
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
+function brandingTheme(formData: FormData) {
+  const fontRaw = String(formData.get("font") ?? DEFAULT_BRAND.font);
+  return {
+    primary_color: normalizeHex(
+      String(formData.get("primary_color") ?? ""),
+      DEFAULT_BRAND.primary_color,
+    ),
+    secondary_color: normalizeHex(
+      String(formData.get("secondary_color") ?? ""),
+      DEFAULT_BRAND.secondary_color,
+    ),
+    bg_color: normalizeHex(
+      String(formData.get("bg_color") ?? ""),
+      DEFAULT_BRAND.bg_color,
+    ),
+    font: BRAND_FONTS.some((item) => item.id === fontRaw)
+      ? fontRaw
+      : DEFAULT_BRAND.font,
+  };
+}
+
+function parsePublicHttpUrl(raw: string, invalidMessage: string, protocolMessage: string) {
+  if (!raw) return { url: null as string | null, error: null as string | null };
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { url: null, error: protocolMessage };
+    }
+    return { url: parsed.toString(), error: null };
+  } catch {
+    return { url: null, error: invalidMessage };
+  }
+}
+
+async function storeBrandingLogo(
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
+  restaurantId: string,
+  currentLogo: string | null,
+  formData: FormData,
+) {
+  const file = formData.get("logo") as File | null;
+  if (file && file.size > 0) {
+    if (file.size > MAX_LOGO_BYTES) {
+      return { logoUrl: currentLogo, error: "Logo must be 2 MB or smaller." };
+    }
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "");
+    const ext = safeName.includes(".")
+      ? safeName.slice(safeName.lastIndexOf(".") + 1).toLowerCase()
+      : "png";
+    const path = `${restaurantId}/${Date.now()}.${ext}`;
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const { error: uploadError } = await supabase.storage
+      .from("branding")
+      .upload(path, bytes, {
+        contentType: file.type || "image/png",
+        upsert: true,
+      });
+    if (uploadError) {
+      return {
+        logoUrl: currentLogo,
+        error: `Logo upload failed (${uploadError.message}). Run supabase/restaurant-branding.sql to create the branding bucket, or paste a logo URL instead.`,
+      };
+    }
+    return {
+      logoUrl: supabase.storage.from("branding").getPublicUrl(path).data.publicUrl,
+      error: null,
+    };
+  }
+  const pasted = String(formData.get("logo_url") ?? "").trim();
+  return { logoUrl: pasted || currentLogo, error: null };
+}
+
+function isMissingBrandColumn(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    (lower.includes("column") || lower.includes("schema cache")) &&
+    (lower.includes("google_review_url") ||
+      lower.includes("google_maps_review_url") ||
+      lower.includes("service_fee_percent"))
+  );
+}
+
 export async function saveRestaurantBranding(formData: FormData) {
   const access = await requireTenantRestaurant();
   if (!access.user) return { error: "Unauthorized." };
@@ -643,33 +726,13 @@ export async function saveRestaurantBranding(formData: FormData) {
   }
 
   const name = String(formData.get("name") ?? "").trim();
-  if (!name) {
-    return { error: "Restaurant name is required." };
-  }
-
-  const slugInput = String(formData.get("slug") ?? "").trim();
-  const slug = slugifyRestaurant(slugInput || name);
+  if (!name) return { error: "Restaurant name is required." };
+  const slug = slugifyRestaurant(String(formData.get("slug") ?? "").trim() || name);
   if (!slug) {
     return { error: "Slug must contain at least one Latin letter or number." };
   }
 
-  const primary_color = normalizeHex(
-    String(formData.get("primary_color") ?? ""),
-    DEFAULT_BRAND.primary_color,
-  );
-  const secondary_color = normalizeHex(
-    String(formData.get("secondary_color") ?? ""),
-    DEFAULT_BRAND.secondary_color,
-  );
-  const bg_color = normalizeHex(
-    String(formData.get("bg_color") ?? ""),
-    DEFAULT_BRAND.bg_color,
-  );
-  const fontRaw = String(formData.get("font") ?? DEFAULT_BRAND.font);
-  const font = BRAND_FONTS.some((item) => item.id === fontRaw)
-    ? fontRaw
-    : DEFAULT_BRAND.font;
-
+  const theme = brandingTheme(formData);
   const supabase = createSupabaseAdminClient();
   const { data: slugTaken } = await supabase
     .from("restaurants")
@@ -677,76 +740,41 @@ export async function saveRestaurantBranding(formData: FormData) {
     .eq("slug", slug)
     .neq("id", restaurant.id)
     .maybeSingle();
-
   if (slugTaken) {
     return { error: "That slug is already used by another restaurant." };
   }
 
-  let logoUrl = restaurantLogo(restaurant);
-  const file = formData.get("logo") as File | null;
-  if (file && file.size > 0) {
-    if (file.size > MAX_LOGO_BYTES) {
-      return { error: "Logo must be 2 MB or smaller." };
-    }
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "");
-    const ext = safeName.includes(".")
-      ? safeName.slice(safeName.lastIndexOf(".") + 1).toLowerCase()
-      : "png";
-    const path = `${restaurant.id}/${Date.now()}.${ext}`;
-    const bytes = Buffer.from(await file.arrayBuffer());
-    const { error: uploadError } = await supabase.storage
-      .from("branding")
-      .upload(path, bytes, {
-        contentType: file.type || "image/png",
-        upsert: true,
-      });
-    if (uploadError) {
-      return {
-        error: `Logo upload failed (${uploadError.message}). Run supabase/restaurant-branding.sql to create the branding bucket, or paste a logo URL instead.`,
-      };
-    }
-    logoUrl = supabase.storage.from("branding").getPublicUrl(path).data
-      .publicUrl;
-  } else {
-    const pasted = String(formData.get("logo_url") ?? "").trim();
-    if (pasted) logoUrl = pasted;
-  }
+  const logo = await storeBrandingLogo(
+    supabase,
+    restaurant.id,
+    restaurantLogo(restaurant),
+    formData,
+  );
+  if (logo.error) return { error: logo.error };
 
-  const googleRaw = String(
-    formData.get("google_maps_review_url") ??
-      formData.get("google_review_url") ??
-      "",
-  ).trim();
-  let google_review_url: string | null = null;
-  if (googleRaw) {
-    try {
-      const parsed = new URL(googleRaw);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        return { error: "Google Review URL must start with http:// or https://." };
-      }
-      google_review_url = parsed.toString();
-    } catch {
-      return { error: "Enter a valid Google Review URL." };
-    }
-  }
+  const review = parsePublicHttpUrl(
+    String(
+      formData.get("google_maps_review_url") ??
+        formData.get("google_review_url") ??
+        "",
+    ).trim(),
+    "Enter a valid Google Review URL.",
+    "Google Review URL must start with http:// or https://.",
+  );
+  if (review.error) return { error: review.error };
 
-  const service_fee_percent = Number(formData.get("service_fee_percent"));
-  const feePercent = Number.isFinite(service_fee_percent)
-    ? Math.min(100, Math.max(0, service_fee_percent))
-    : 0;
-
+  const feeRaw = Number(formData.get("service_fee_percent"));
   const payload = {
     name,
     slug,
-    logo: logoUrl,
-    logo_url: logoUrl,
-    primary_color,
-    secondary_color,
-    bg_color,
-    font,
-    google_review_url,
-    google_maps_review_url: google_review_url,
-    service_fee_percent: feePercent,
+    logo: logo.logoUrl,
+    logo_url: logo.logoUrl,
+    ...theme,
+    google_review_url: review.url,
+    google_maps_review_url: review.url,
+    service_fee_percent: Number.isFinite(feeRaw)
+      ? Math.min(100, Math.max(0, feeRaw))
+      : 0,
   };
 
   const { error } = await supabase
@@ -755,30 +783,18 @@ export async function saveRestaurantBranding(formData: FormData) {
     .eq("id", restaurant.id);
 
   if (error) {
-    const message = error.message.toLowerCase();
-    const missingColumn =
-      (message.includes("column") || message.includes("schema cache")) &&
-      (message.includes("google_review_url") ||
-        message.includes("google_maps_review_url") ||
-        message.includes("service_fee_percent"));
-    if (missingColumn) {
-      const {
-        google_review_url: unusedReviewUrl,
-        google_maps_review_url: unusedMapsUrl,
-        service_fee_percent: unusedFee,
-        ...withoutReview
-      } = payload;
-      void unusedReviewUrl;
-      void unusedMapsUrl;
-      void unusedFee;
-      const retry = await supabase
-        .from("restaurants")
-        .update(withoutReview)
-        .eq("id", restaurant.id);
-      if (retry.error) return { error: retry.error.message };
-    } else {
-      return { error: error.message };
-    }
+    if (!isMissingBrandColumn(error.message)) return { error: error.message };
+    const retry = await supabase
+      .from("restaurants")
+      .update(
+        omitKeys(payload, [
+          "google_review_url",
+          "google_maps_review_url",
+          "service_fee_percent",
+        ]),
+      )
+      .eq("id", restaurant.id);
+    if (retry.error) return { error: retry.error.message };
   }
 
   revalidatePath("/admin");

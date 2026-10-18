@@ -1,4 +1,5 @@
 import { getPublicAppUrl } from "@/lib/app-url";
+import { errorMessage } from "@/lib/http-error";
 import { normalizeStaffEmail } from "@/lib/staff-role-shared";
 import { parseSuperAdminEmails } from "@/lib/super-admin-shared";
 import { createSupabaseAdminClient } from "@/lib/supabaseAdmin";
@@ -11,9 +12,11 @@ export const runtime = "nodejs";
 const PASSWORD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
 
 function generateTempPassword() {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
   let token = "";
-  for (let index = 0; index < 4; index += 1) {
-    token += PASSWORD_CHARS[Math.floor(Math.random() * PASSWORD_CHARS.length)];
+  for (const byte of bytes) {
+    token += PASSWORD_CHARS[byte % PASSWORD_CHARS.length];
   }
   return `SmartMenu${token}!`;
 }
@@ -85,21 +88,63 @@ async function findAuthUserIdByEmail(
   return null;
 }
 
+function resetPayload(body: {
+  email?: string;
+  password?: string;
+  generate?: boolean;
+}) {
+  const email = normalizeStaffEmail(body.email);
+  const provided = String(body.password ?? "").trim();
+  const password =
+    !provided || body.generate ? generateTempPassword() : provided;
+  return { email, password };
+}
+
+function staffResetForbidden(
+  actorRole: string | null | undefined,
+  targetRole: string | undefined,
+  email: string,
+) {
+  if (parseSuperAdminEmails().includes(email)) return true;
+  if (targetRole === "owner") return true;
+  return actorRole === "manager" && targetRole !== "waiter";
+}
+
+async function writeAuthPassword(
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
+  email: string,
+  password: string,
+) {
+  const userId = await findAuthUserIdByEmail(supabase, email);
+  if (!userId) {
+    const created = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    });
+    if (created.error || !created.data.user?.id) {
+      return created.error?.message ?? "Could not create the auth user.";
+    }
+    return null;
+  }
+  const { error } = await supabase.auth.admin.updateUserById(userId, {
+    password,
+  });
+  return error?.message ?? null;
+}
+
 export async function POST(request: Request) {
   const tenant = await requireTenantApi(["owner", "manager"]);
   if (!tenant.ok) return tenant.response;
 
   try {
-    const body = (await request.json()) as {
-      email?: string;
-      password?: string;
-      generate?: boolean;
-    };
-
-    const email = normalizeStaffEmail(body.email);
-    const provided = String(body.password ?? "").trim();
-    const password =
-      !provided || body.generate ? generateTempPassword() : provided;
+    const { email, password } = resetPayload(
+      (await request.json()) as {
+        email?: string;
+        password?: string;
+        generate?: boolean;
+      },
+    );
 
     if (!email || !email.includes("@")) {
       return NextResponse.json({ error: "Enter a valid email." }, { status: 400 });
@@ -109,9 +154,6 @@ export async function POST(request: Request) {
         { error: "Password must be at least 6 characters." },
         { status: 400 },
       );
-    }
-    if (parseSuperAdminEmails().includes(email)) {
-      return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     }
 
     const apiKey = process.env.RESEND_API_KEY?.trim();
@@ -141,61 +183,27 @@ export async function POST(request: Request) {
         { status: 404 },
       );
     }
-
-    if (row.role === "owner") {
-      return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-    }
-    if (tenant.staffRole === "manager" && row.role !== "waiter") {
+    if (staffResetForbidden(tenant.staffRole, row.role, email)) {
       return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     }
 
-    const userId = await findAuthUserIdByEmail(supabase, email);
-    if (!userId) {
-      const created = await supabase.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-      });
-      if (created.error || !created.data.user?.id) {
-        return NextResponse.json(
-          { error: created.error?.message ?? "Could not create the auth user." },
-          { status: 500 },
-        );
-      }
-    } else {
-      const { error } = await supabase.auth.admin.updateUserById(userId, {
-        password,
-      });
-      if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
-      }
+    const writeError = await writeAuthPassword(supabase, email, password);
+    if (writeError) {
+      return NextResponse.json({ error: writeError }, { status: 500 });
     }
 
     const resend = new Resend(apiKey);
-    const loginUrl = `${getPublicAppUrl()}/admin`;
     const { error: emailError } = await resend.emails.send({
       from: "onboarding@resend.dev",
       to: email,
       subject: "Smart Menu: დროებითი პაროლი",
-      html: passwordResetHtml(email, password, loginUrl),
+      html: passwordResetHtml(email, password, `${getPublicAppUrl()}/admin`),
     });
-
-    if (emailError) {
-      throw emailError;
-    }
+    if (emailError) throw emailError;
 
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Resend error:", error);
-    const message =
-      error instanceof Error
-        ? error.message
-        : error &&
-            typeof error === "object" &&
-            "message" in error &&
-            typeof error.message === "string"
-          ? error.message
-          : String(error);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
   }
 }

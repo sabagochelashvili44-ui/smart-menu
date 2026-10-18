@@ -11,6 +11,31 @@ import { getAdminAccessContext } from "@/lib/tenant";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+function enforceAdminRoute({
+  pathname,
+  isSuperAdmin,
+  impersonating,
+  staffRole,
+}: {
+  pathname: string;
+  isSuperAdmin: boolean;
+  impersonating: boolean;
+  staffRole: Parameters<typeof pathAllowedForRole>[1] | null;
+}) {
+  const onSuperAdminPage = isSuperAdminPath(pathname);
+  if (!isSuperAdmin && onSuperAdminPage) {
+    redirect(homePathForRole(staffRole));
+  }
+  if (isSuperAdmin && !impersonating && !onSuperAdminPage) {
+    redirect("/admin/super-admin");
+  }
+  if (onSuperAdminPage || !staffRole) return onSuperAdminPage;
+  if (!pathAllowedForRole(pathname, staffRole)) {
+    redirect(homePathForRole(staffRole));
+  }
+  return onSuperAdminPage;
+}
+
 export default async function AdminLayout({
   children,
 }: {
@@ -29,22 +54,13 @@ export default async function AdminLayout({
   }
 
   const pathname = (await headers()).get("x-pathname") ?? "";
-  const onSuperAdminPage = isSuperAdminPath(pathname);
   const impersonating = Boolean(isSuperAdmin && viewingAs);
-
-  if (!isSuperAdmin && onSuperAdminPage) {
-    redirect(homePathForRole(staffRole));
-  }
-
-  if (isSuperAdmin && !impersonating && !onSuperAdminPage) {
-    redirect("/admin/super-admin");
-  }
-
-  if (!onSuperAdminPage && staffRole) {
-    if (!pathAllowedForRole(pathname, staffRole)) {
-      redirect(homePathForRole(staffRole));
-    }
-  }
+  const onSuperAdminPage = enforceAdminRoute({
+    pathname,
+    isSuperAdmin,
+    impersonating,
+    staffRole,
+  });
 
   const showRestaurantTabs = Boolean(staffRole) && !onSuperAdminPage;
   const showSuperAdmin = isSuperAdmin && !impersonating;

@@ -61,7 +61,7 @@ export async function GET(request: Request) {
   return NextResponse.json({ orders });
 }
 
-export async function POST() {
+export function POST() {
   return NextResponse.json(
     {
       error:

@@ -35,7 +35,7 @@ import {
 } from "@/lib/restaurant-brand";
 import type { SubscriptionStatus } from "@/lib/super-admin-shared";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 
 function toDatetimeLocal(iso: string | null) {
   if (!iso) return "";
@@ -188,9 +188,14 @@ export function SuperAdminPanel({
                             ? t.suspendTenant
                             : t.activateTenant}
                         </Button>
-                        <Button size="sm" variant="ghost" render={<a href={`/menu/${slug}`} target="_blank" rel="noreferrer" />}>
+                        <a
+                          href={`/menu/${slug}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm font-medium underline-offset-4 hover:underline"
+                        >
                           {t.openMenu}
-                        </Button>
+                        </a>
                         <Button
                           type="button"
                           size="sm"
@@ -627,15 +632,26 @@ function TenantDialog({
 
 function Field({
   label,
+  htmlFor,
   children,
 }: {
   label: string;
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1">
-      <Label>{label}</Label>
-      {children}
+      {htmlFor ? (
+        <>
+          <Label htmlFor={htmlFor}>{label}</Label>
+          {children}
+        </>
+      ) : (
+        <Label className="flex-col items-stretch gap-1">
+          <span>{label}</span>
+          {children}
+        </Label>
+      )}
     </div>
   );
 }
@@ -673,6 +689,7 @@ function CopyLinkField({
 }) {
   const { t } = useAdminLocale();
   const [copied, setCopied] = useState(false);
+  const fieldId = useId();
 
   async function copy() {
     try {
@@ -691,9 +708,9 @@ function CopyLinkField({
 
   return (
     <div className="space-y-1">
-      {label ? <Label>{label}</Label> : null}
+      {label ? <Label htmlFor={fieldId}>{label}</Label> : null}
       <div className="flex gap-2">
-        <Input readOnly value={url} className="font-mono text-xs" />
+        <Input id={fieldId} readOnly value={url} className="font-mono text-xs" />
         <Button
           type="button"
           variant="outline"

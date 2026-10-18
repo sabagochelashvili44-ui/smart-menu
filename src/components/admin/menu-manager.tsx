@@ -524,13 +524,16 @@ export function MenuManager({
           />
         </div>
         <div className="flex items-center gap-2 sm:col-span-2">
-          <Switch
-            checked={draft.is_available}
-            onCheckedChange={(checked) =>
-              setDraft((current) => ({ ...current, is_available: checked }))
-            }
-          />
-          <Label>{draft.is_available ? t.inStock : t.soldOut}</Label>
+          <Label htmlFor="dish-available" className="flex items-center gap-2">
+            <Switch
+              id="dish-available"
+              checked={draft.is_available}
+              onCheckedChange={(checked) =>
+                setDraft((current) => ({ ...current, is_available: checked }))
+              }
+            />
+            {draft.is_available ? t.inStock : t.soldOut}
+          </Label>
         </div>
         <div className="flex gap-2 sm:col-span-2">
           <Button type="submit" disabled={saving || uploadingImage}>

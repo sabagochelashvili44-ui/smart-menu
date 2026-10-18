@@ -76,13 +76,31 @@ export function isSubscriptionSuspended(status: string | null | undefined) {
   return (status ?? "").toLowerCase() === "suspended";
 }
 
+function trimChars(value: string, code: number) {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === code) start += 1;
+  while (end > start && value.charCodeAt(end - 1) === code) end -= 1;
+  return value.slice(start, end);
+}
+
 export function slugifyRestaurant(input: string) {
-  const ascii = input
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return ascii.slice(0, 64);
+  const lower = input.trim().toLowerCase();
+  let ascii = "";
+  let pendingDash = false;
+  for (const char of lower) {
+    const code = char.codePointAt(0) ?? 0;
+    const isDigit = code >= 48 && code <= 57;
+    const isLetter = code >= 97 && code <= 122;
+    if (isDigit || isLetter) {
+      ascii += char;
+      pendingDash = false;
+    } else if (ascii && !pendingDash) {
+      ascii += "-";
+      pendingDash = true;
+    }
+  }
+  return trimChars(ascii, 45).slice(0, 64);
 }
 
 export function normalizeHex(value: string | null | undefined, fallback: string) {
@@ -94,9 +112,9 @@ export function normalizeHex(value: string | null | undefined, fallback: string)
 
 function hexLuminance(hex: string) {
   const n = hex.replace("#", "");
-  const r = parseInt(n.slice(0, 2), 16) / 255;
-  const g = parseInt(n.slice(2, 4), 16) / 255;
-  const b = parseInt(n.slice(4, 6), 16) / 255;
+  const r = Number.parseInt(n.slice(0, 2), 16) / 255;
+  const g = Number.parseInt(n.slice(2, 4), 16) / 255;
+  const b = Number.parseInt(n.slice(4, 6), 16) / 255;
   const lin = (c: number) =>
     c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);

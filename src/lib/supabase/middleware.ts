@@ -8,9 +8,13 @@ import {
 } from "@/lib/tenant-shared";
 
 function supabaseUrl() {
-  return (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "")
-    .replace(/\/+$/, "")
-    .replace(/\/rest\/v1$/i, "");
+  let url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  while (url.endsWith("/")) url = url.slice(0, -1);
+  const restSuffix = "/rest/v1";
+  if (url.toLowerCase().endsWith(restSuffix)) {
+    url = url.slice(0, -restSuffix.length);
+  }
+  return url;
 }
 
 function nextWithPathname(request: NextRequest) {
@@ -21,14 +25,55 @@ function nextWithPathname(request: NextRequest) {
   });
 }
 
+function impersonateRedirect(
+  request: NextRequest,
+  response: NextResponse,
+  impersonateId: string,
+) {
+  const clean = request.nextUrl.clone();
+  clean.searchParams.delete(IMPERSONATE_RESTAURANT_QUERY);
+  if (clean.pathname === "/admin/super-admin") {
+    clean.pathname = "/admin";
+  }
+  const redirected = NextResponse.redirect(clean);
+  for (const cookie of response.cookies.getAll()) {
+    redirected.cookies.set(cookie);
+  }
+  redirected.cookies.set(VIEW_AS_COOKIE, impersonateId, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 8,
+  });
+  return redirected;
+}
+
+function signedInHome(request: NextRequest, isSuperAdmin: boolean) {
+  const next = request.nextUrl.searchParams.get("next")?.trim() ?? "";
+  const admin = request.nextUrl.clone();
+  admin.search = "";
+  const nextPath =
+    next.startsWith("/admin") && !next.startsWith("//")
+      ? next.split("?")[0] || "/admin"
+      : "";
+  const nextIsSuperAdmin =
+    nextPath === "/admin/super-admin" ||
+    nextPath.startsWith("/admin/super-admin/");
+  if (nextPath && (!nextIsSuperAdmin || isSuperAdmin)) {
+    admin.pathname = nextPath;
+  } else if (isSuperAdmin) {
+    admin.pathname = "/admin/super-admin";
+  } else {
+    admin.pathname = "/admin";
+  }
+  return NextResponse.redirect(admin);
+}
+
 export async function updateSession(request: NextRequest) {
   let response = nextWithPathname(request);
   const url = supabaseUrl();
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !anonKey) {
-    return response;
-  }
+  if (!url || !anonKey) return response;
 
   const supabase = createServerClient(url, anonKey, {
     cookies: {
@@ -62,22 +107,7 @@ export async function updateSession(request: NextRequest) {
     userLooksLikeSuperAdmin(user) &&
     RESTAURANT_ID_RE.test(impersonateId)
   ) {
-    const clean = request.nextUrl.clone();
-    clean.searchParams.delete(IMPERSONATE_RESTAURANT_QUERY);
-    if (clean.pathname === "/admin/super-admin") {
-      clean.pathname = "/admin";
-    }
-    const redirected = NextResponse.redirect(clean);
-    for (const cookie of response.cookies.getAll()) {
-      redirected.cookies.set(cookie);
-    }
-    redirected.cookies.set(VIEW_AS_COOKIE, impersonateId, {
-      httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 8,
-    });
-    return redirected;
+    return impersonateRedirect(request, response, impersonateId);
   }
 
   if (isAdmin && !user) {
@@ -91,28 +121,8 @@ export async function updateSession(request: NextRequest) {
     const tenantKey =
       request.nextUrl.searchParams.get("restaurant") ??
       request.nextUrl.searchParams.get("slug");
-    if (tenantKey) {
-      return response;
-    }
-
-    const next = request.nextUrl.searchParams.get("next")?.trim() ?? "";
-    const admin = request.nextUrl.clone();
-    admin.search = "";
-    const nextPath =
-      next.startsWith("/admin") && !next.startsWith("//")
-        ? next.split("?")[0] || "/admin"
-        : "";
-    const nextIsSuperAdmin =
-      nextPath === "/admin/super-admin" ||
-      nextPath.startsWith("/admin/super-admin/");
-    if (nextPath && (!nextIsSuperAdmin || userLooksLikeSuperAdmin(user))) {
-      admin.pathname = nextPath;
-    } else if (userLooksLikeSuperAdmin(user)) {
-      admin.pathname = "/admin/super-admin";
-    } else {
-      admin.pathname = "/admin";
-    }
-    return NextResponse.redirect(admin);
+    if (tenantKey) return response;
+    return signedInHome(request, userLooksLikeSuperAdmin(user));
   }
 
   return response;

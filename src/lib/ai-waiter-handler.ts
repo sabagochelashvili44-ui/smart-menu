@@ -24,7 +24,27 @@ function lastUserMessage(messages: ChatMessage[]) {
   return null;
 }
 
-async function openAiStreamToText(openaiResponse: Response) {
+function enqueueSseToken(
+  encoder: TextEncoder,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  line: string,
+) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data:")) return;
+  const data = trimmed.slice(5).trim();
+  if (!data || data === "[DONE]") return;
+  try {
+    const json = JSON.parse(data) as {
+      choices?: { delta?: { content?: string } }[];
+    };
+    const token = json.choices?.[0]?.delta?.content;
+    if (token) controller.enqueue(encoder.encode(token));
+  } catch {
+    /* ignore incomplete JSON lines */
+  }
+}
+
+function openAiStreamToText(openaiResponse: Response) {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
@@ -44,21 +64,8 @@ async function openAiStreamToText(openaiResponse: Response) {
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
-
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const data = trimmed.slice(5).trim();
-            if (!data || data === "[DONE]") continue;
-            try {
-              const json = JSON.parse(data) as {
-                choices?: { delta?: { content?: string } }[];
-              };
-              const token = json.choices?.[0]?.delta?.content;
-              if (token) controller.enqueue(encoder.encode(token));
-            } catch {
-              /* ignore incomplete JSON lines */
-            }
+            enqueueSseToken(encoder, controller, line);
           }
         }
         controller.close();
@@ -69,21 +76,50 @@ async function openAiStreamToText(openaiResponse: Response) {
   });
 }
 
-export async function handleAiWaiterPost(request: Request) {
-  const body = (await request.json()) as {
-    messages?: ChatMessage[];
-    menuContext?: MenuContext;
-    message?: string;
-    history?: ChatMessage[];
-    dishes?: AssistantDish[];
-    restaurantName?: string;
-    locale?: "ka" | "en" | "ru";
-  };
-
+function waiterPromptContext(body: {
+  messages?: ChatMessage[];
+  menuContext?: MenuContext;
+  message?: string;
+  history?: ChatMessage[];
+  dishes?: AssistantDish[];
+  restaurantName?: string;
+  locale?: "ka" | "en" | "ru";
+}) {
   const packedMessages = Array.isArray(body.messages) ? body.messages : [];
   const fromMessages = lastUserMessage(packedMessages);
-  const message = fromMessages?.content || body.message?.trim() || "";
-  if (!message) {
+  const localeRaw = body.menuContext?.locale ?? body.locale;
+  const history = (
+    fromMessages
+      ? packedMessages.slice(0, fromMessages.index)
+      : (body.history ?? [])
+  )
+    .filter((item) => item.role === "user" || item.role === "assistant")
+    .slice(-12);
+  return {
+    message: fromMessages?.content || body.message?.trim() || "",
+    restaurantName:
+      body.menuContext?.restaurantName?.trim() ||
+      body.restaurantName?.trim() ||
+      "Georgian House",
+    dishes: body.menuContext?.dishes ?? body.dishes ?? [],
+    locale: localeRaw === "en" || localeRaw === "ru" ? localeRaw : "ka" as const,
+    history,
+  };
+}
+
+export async function handleAiWaiterPost(request: Request) {
+  const ctx = waiterPromptContext(
+    (await request.json()) as {
+      messages?: ChatMessage[];
+      menuContext?: MenuContext;
+      message?: string;
+      history?: ChatMessage[];
+      dishes?: AssistantDish[];
+      restaurantName?: string;
+      locale?: "ka" | "en" | "ru";
+    },
+  );
+  if (!ctx.message) {
     return NextResponse.json({ error: "Message is required." }, { status: 400 });
   }
 
@@ -96,24 +132,11 @@ export async function handleAiWaiterPost(request: Request) {
     );
   }
 
-  const restaurantName =
-    body.menuContext?.restaurantName?.trim() ||
-    body.restaurantName?.trim() ||
-    "Georgian House";
-  const dishes = body.menuContext?.dishes ?? body.dishes ?? [];
-  const localeRaw = body.menuContext?.locale ?? body.locale;
-  const locale =
-    localeRaw === "en" || localeRaw === "ru" ? localeRaw : "ka";
-
-  const history = (
-    fromMessages
-      ? packedMessages.slice(0, fromMessages.index)
-      : (body.history ?? [])
-  )
-    .filter((item) => item.role === "user" || item.role === "assistant")
-    .slice(-12);
-
-  const system = buildGuestAssistantSystemPrompt(restaurantName, dishes, locale);
+  const system = buildGuestAssistantSystemPrompt(
+    ctx.restaurantName,
+    ctx.dishes,
+    ctx.locale,
+  );
 
   const openaiResponse = await fetch(
     "https://api.openai.com/v1/chat/completions",
@@ -129,11 +152,11 @@ export async function handleAiWaiterPost(request: Request) {
         stream: true,
         messages: [
           { role: "system", content: system },
-          ...history.map((item) => ({
+          ...ctx.history.map((item) => ({
             role: item.role,
             content: item.content,
           })),
-          { role: "user", content: message },
+          { role: "user", content: ctx.message },
         ],
       }),
     },
@@ -151,7 +174,7 @@ export async function handleAiWaiterPost(request: Request) {
     );
   }
 
-  return new Response(await openAiStreamToText(openaiResponse), {
+  return new Response(openAiStreamToText(openaiResponse), {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",

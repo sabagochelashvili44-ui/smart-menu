@@ -4,6 +4,8 @@ import { DishCardImage } from "@/components/guest/dish-card";
 import { AiChatbot } from "@/components/menu/ai-chatbot";
 import { ChefNavBubble } from "@/components/menu/digital-host-widget";
 import { CartDrawer, type CartLine } from "@/components/menu/cart-drawer";
+import { applyQuantityDelta, cartSubtotal } from "@/components/menu/guest-cart";
+import { useGuestWeather } from "@/components/menu/use-guest-weather";
 import { CrossSellSection } from "@/components/menu/cross-sell-section";
 import { QuantityStepper } from "@/components/menu/quantity-stepper";
 import { ServiceFeedbackDialog } from "@/components/menu/service-feedback-dialog";
@@ -25,11 +27,7 @@ import {
 import { useMenuTranslations } from "@/lib/use-menu-translations";
 import { type CrossSellDish } from "@/lib/cross-sell";
 import { emptyDietFilter, type DietFilter } from "@/lib/guest-diet";
-import {
-  localExternalContext,
-  pickContextUpsells,
-  type ExternalContext,
-} from "@/lib/recommendations";
+import { pickContextUpsells } from "@/lib/recommendations";
 import { looksLikeCulinaryQuestion } from "@/lib/host-query";
 import { trackGuestIntent } from "@/lib/guest-intent";
 import {
@@ -117,7 +115,7 @@ export function RestaurantMenu({
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeError, setNoticeError] = useState(false);
   const [diet, setDiet] = useState<DietFilter>(emptyDietFilter);
-  const [context, setContext] = useState<ExternalContext>(localExternalContext);
+  const context = useGuestWeather();
 
   useEffect(() => {
     const stored = window.localStorage.getItem("smart-ai-menu-guest-lang");
@@ -140,33 +138,6 @@ export function RestaurantMenu({
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
-
-  useEffect(() => {
-    const fallback = localExternalContext();
-    setContext(fallback);
-    const controller = new AbortController();
-    void fetch(
-      "https://api.open-meteo.com/v1/forecast?latitude=41.7151&longitude=44.8271&current=temperature_2m,precipitation",
-      { signal: controller.signal },
-    )
-      .then(async (res) => {
-        if (!res.ok) return;
-        const json = (await res.json()) as {
-          current?: { temperature_2m?: number; precipitation?: number };
-        };
-        const temperatureC = json.current?.temperature_2m;
-        if (typeof temperatureC !== "number") return;
-        setContext({
-          hour: new Date().getHours(),
-          temperatureC,
-          rainy: (json.current?.precipitation ?? 0) > 0,
-        });
-      })
-      .catch(() => {
-        setContext(localExternalContext());
-      });
-    return () => controller.abort();
-  }, []);
 
   useEffect(() => {
     if (!notice || noticeError) return;
@@ -200,10 +171,7 @@ export function RestaurantMenu({
   }, [activeCategory, dishes, searchQuery]);
 
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
-  const subtotal = cart.reduce(
-    (sum, line) => sum + line.quantity * line.price,
-    0,
-  );
+  const subtotal = cartSubtotal(cart);
   const totals = cartTotals(
     subtotal,
     parseServiceFeePercent(restaurant.service_fee_percent),
@@ -253,30 +221,7 @@ export function RestaurantMenu({
     if (nextQuantity < 1) {
       setLastAddedId((current) => (current === dishId ? null : current));
     }
-    setCart((current) => {
-      const row = current.find((line) => line.id === dishId);
-      if (!row) {
-        if (delta <= 0 || !dish) return current;
-        return [
-          ...current,
-          {
-            id: dish.id,
-            name: dish.name,
-            price: Number(dish.price),
-            quantity: 1,
-          },
-        ];
-      }
-
-      const quantity = row.quantity + delta;
-      if (quantity < 1) {
-        return current.filter((line) => line.id !== dishId);
-      }
-
-      return current.map((line) =>
-        line.id === dishId ? { ...line, quantity } : line,
-      );
-    });
+    setCart((current) => applyQuantityDelta(current, dishId, delta, dish));
     setNotice(null);
   }
 

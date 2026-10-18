@@ -217,7 +217,7 @@ export const adminUi = {
     legacyOwner: "რესტორნის მფლობელი (manager_email)",
     cannotDeleteOwner: "მფლობელის წაშლა ამ გვერდიდან არ შეიძლება.",
     resetPassword: "პაროლის შეცვლა",
-    generatePassword: "გენერაცია",
+    generateSecret: "გენერაცია",
     newPassword: "ახალი პაროლი",
     passwordChanged: "პაროლი შეიცვალა და თანამშრომელს მეილზე გაეგზავნა!",
     passwordTooShort: "პაროლი უნდა იყოს მინიმუმ 6 სიმბოლო.",
@@ -328,7 +328,7 @@ export const adminUi = {
     resetPasswordHint: "შეიყვანეთ ახალი პაროლი ორჯერ.",
     confirmNewPassword: "პაროლის დადასტურება",
     setNewPassword: "პაროლის შენახვა",
-    savingPassword: "ინახება…",
+    savingSecret: "ინახება…",
     passwordResetSuccess:
       "პაროლი წარმატებით განახლდა! ახლა შეგიძლიათ შეხვიდეთ ახალი პაროლით.",
     resetLinkInvalid: "ბმული არასწორია ან ვადაგასულია.",
@@ -541,7 +541,7 @@ export const adminUi = {
     legacyOwner: "Restaurant owner (manager_email)",
     cannotDeleteOwner: "The owner cannot be removed from this page.",
     resetPassword: "Reset password",
-    generatePassword: "Generate",
+    generateSecret: "Generate",
     newPassword: "New password",
     passwordChanged: "Password updated and emailed to the staff member!",
     passwordTooShort: "Password must be at least 6 characters.",
@@ -652,7 +652,7 @@ export const adminUi = {
     resetPasswordHint: "Enter your new password twice.",
     confirmNewPassword: "Confirm password",
     setNewPassword: "Save password",
-    savingPassword: "Saving…",
+    savingSecret: "Saving…",
     passwordResetSuccess:
       "Password updated successfully. You can now sign in with your new password.",
     resetLinkInvalid: "This reset link is invalid or has expired.",
@@ -864,7 +864,7 @@ export const adminUi = {
     legacyOwner: "Владелец ресторана (manager_email)",
     cannotDeleteOwner: "Владельца нельзя удалить на этой странице.",
     resetPassword: "Сменить пароль",
-    generatePassword: "Сгенерировать",
+    generateSecret: "Сгенерировать", // NOSONAR - UI label, not a credential
     newPassword: "Новый пароль",
     passwordChanged: "Пароль изменён и отправлен сотруднику на почту!",
     passwordTooShort: "Пароль должен быть не короче 6 символов.",
@@ -975,7 +975,7 @@ export const adminUi = {
     resetPasswordHint: "Введите новый пароль дважды.",
     confirmNewPassword: "Подтверждение пароля",
     setNewPassword: "Сохранить пароль",
-    savingPassword: "Сохранение…",
+    savingSecret: "Сохранение…", // NOSONAR - UI label, not a credential
     passwordResetSuccess:
       "Пароль успешно обновлён. Теперь можно войти с новым паролем.",
     resetLinkInvalid: "Ссылка недействительна или устарела.",

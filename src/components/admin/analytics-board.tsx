@@ -77,11 +77,24 @@ function rangeQuery(preset: AnalyticsRangePreset, fromYmd: string, toYmd: string
   return params.toString();
 }
 
+function useAnalyticsRange() {
+  const searchParams = useSearchParams();
+  const rangeParam = searchParams.get("range");
+  const preset: AnalyticsRangePreset = isAnalyticsRangePreset(rangeParam)
+    ? rangeParam
+    : "last7";
+  return {
+    preset,
+    fromYmd: searchParams.get("from") ?? "",
+    toYmd: searchParams.get("to") ?? "",
+  };
+}
+
 export function AnalyticsBoard({ restaurantId }: { restaurantId: string }) {
   const { locale, t } = useAdminLocale();
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const { preset, fromYmd, toYmd } = useAnalyticsRange();
   const [data, setData] = useState<Analytics | null>(null);
   const [insights, setInsights] = useState<AnalyticsInsights | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -90,13 +103,6 @@ export function AnalyticsBoard({ restaurantId }: { restaurantId: string }) {
   const [refreshing, setRefreshing] = useState(false);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-
-  const rangeParam = searchParams.get("range");
-  const preset: AnalyticsRangePreset = isAnalyticsRangePreset(rangeParam)
-    ? rangeParam
-    : "last7";
-  const fromYmd = searchParams.get("from") ?? "";
-  const toYmd = searchParams.get("to") ?? "";
 
   const query = useMemo(
     () => rangeQuery(preset, fromYmd, toYmd),

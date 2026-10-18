@@ -82,11 +82,17 @@ function recordSold(
 
 function recordCombos(combos: Record<string, number>, items: AnalyticsLine[]) {
   const names = [
-    ...new Set(items.map((item) => item.dish_id || item.name).filter(Boolean)),
+    ...new Set(
+      items
+        .map((item) => item.dish_id || item.name)
+        .filter((name): name is string => Boolean(name)),
+    ),
   ];
   for (let i = 0; i < names.length; i += 1) {
     for (let j = i + 1; j < names.length; j += 1) {
-      const pair = [names[i], names[j]].sort().join("||");
+      const pair = [names[i], names[j]]
+        .sort((a, b) => a.localeCompare(b))
+        .join("||");
       combos[pair] = (combos[pair] ?? 0) + 1;
     }
   }
@@ -122,24 +128,16 @@ function estimatedProfit(revenue: number, marginScore: number) {
   return revenue * (Math.min(12, Math.max(0, marginScore)) / 12);
 }
 
-export function computeAnalytics(input: {
-  dishes: AnalyticsDish[];
-  tickets?: AnalyticsTicket[];
-  reviews: AnalyticsReview[];
-  intentEvents?: IntentEvent[];
-  waiterCalls?: WaiterCallMetric[];
-}) {
-  const sold: Record<string, { qty: number; revenue: number; name: string }> =
-    {};
+function tallyCompletedCalls(calls: WaiterCallMetric[]) {
+  const sold: Record<string, { qty: number; revenue: number; name: string }> = {};
   const combos: Record<string, number> = {};
-
   let revenue = 0;
   let orderCount = 0;
   let acknowledgedCallCount = 0;
   let pendingCallCount = 0;
   let cancelledCallCount = 0;
 
-  for (const call of input.waiterCalls ?? []) {
+  for (const call of calls) {
     const status = call.status ?? "";
     if (isPendingCall(status)) {
       pendingCallCount += 1;
@@ -150,25 +148,31 @@ export function computeAnalytics(input: {
       continue;
     }
     if (!isAcknowledgedCall(status)) continue;
-
     acknowledgedCallCount += 1;
     const items = call.items ?? [];
     const amount = callRevenue(items);
     if (items.length === 0 && amount <= 0) continue;
-
     orderCount += 1;
     revenue += amount;
     recordCombos(combos, items);
     recordSold(sold, items);
   }
 
-  const completedRevenue = revenue;
-  const completedOrderCount = orderCount;
+  return {
+    sold,
+    combos,
+    revenue,
+    orderCount,
+    acknowledgedCallCount,
+    pendingCallCount,
+    cancelledCallCount,
+  };
+}
 
+function tallyIntent(events: IntentEvent[]) {
   const views: Record<string, number> = {};
   const cartAdds: Record<string, { qty: number; name: string }> = {};
-
-  for (const event of input.intentEvents ?? []) {
+  for (const event of events) {
     const key = dishKey(event.dish_id, event.dish_name);
     if (event.event_type === "view") {
       views[key] = (views[key] ?? 0) + Math.max(1, event.quantity);
@@ -180,22 +184,14 @@ export function computeAnalytics(input: {
       cartAdds[key] = current;
     }
   }
+  return { views, cartAdds };
+}
 
-  const waiterShown: Record<string, { qty: number; name: string }> = {};
-  for (const call of input.waiterCalls ?? []) {
-    if (isAcknowledgedCall(call.status)) continue;
-    for (const item of call.items) {
-      const key = dishKey(item.dish_id, item.name);
-      const current = waiterShown[key] ?? { qty: 0, name: item.name };
-      current.qty += item.quantity;
-      waiterShown[key] = current;
-    }
-  }
-
+function waitMetrics(calls: WaiterCallMetric[]) {
   const waitSamples: number[] = [];
   let openCalls = 0;
   const now = Date.now();
-  for (const call of input.waiterCalls ?? []) {
+  for (const call of calls) {
     if (call.status === "open") {
       openCalls += 1;
       if (call.created_at) {
@@ -215,7 +211,6 @@ export function computeAnalytics(input: {
       );
     }
   }
-
   const avgWaitMinutes = waitSamples.length
     ? Number(
         (
@@ -223,6 +218,55 @@ export function computeAnalytics(input: {
         ).toFixed(1),
       )
     : 0;
+  return { avgWaitMinutes, openCalls };
+}
+
+function dishRole(
+  dish: AnalyticsDish,
+  qty: number,
+  abandonedQty: number,
+) {
+  if (!dish.is_available) return "waste-risk";
+  if (qty >= 2 && dish.margin_score >= 8) return "star";
+  if (qty >= 2 && dish.margin_score < 6) return "plowhorse";
+  if (qty === 0 && dish.margin_score >= 8) return "puzzle";
+  if (qty === 0 && abandonedQty >= 3) return "waste-risk";
+  return "standard";
+}
+
+export function computeAnalytics(input: {
+  dishes: AnalyticsDish[];
+  tickets?: AnalyticsTicket[];
+  reviews: AnalyticsReview[];
+  intentEvents?: IntentEvent[];
+  waiterCalls?: WaiterCallMetric[];
+}) {
+  const calls = input.waiterCalls ?? [];
+  const {
+    sold,
+    combos,
+    revenue,
+    orderCount,
+    acknowledgedCallCount,
+    pendingCallCount,
+    cancelledCallCount,
+  } = tallyCompletedCalls(calls);
+  const completedRevenue = revenue;
+  const completedOrderCount = orderCount;
+  const { views, cartAdds } = tallyIntent(input.intentEvents ?? []);
+
+  const waiterShown: Record<string, { qty: number; name: string }> = {};
+  for (const call of input.waiterCalls ?? []) {
+    if (isAcknowledgedCall(call.status)) continue;
+    for (const item of call.items) {
+      const key = dishKey(item.dish_id, item.name);
+      const current = waiterShown[key] ?? { qty: 0, name: item.name };
+      current.qty += item.quantity;
+      waiterShown[key] = current;
+    }
+  }
+
+  const { avgWaitMinutes, openCalls } = waitMetrics(calls);
 
   const engineering = input.dishes.map((dish) => {
     const key = dish.id;
@@ -241,12 +285,7 @@ export function computeAnalytics(input: {
     const profit = estimatedProfit(stats.revenue, dish.margin_score);
     const profitIndex = Number((stats.qty * dish.margin_score + profit).toFixed(2));
 
-    let role = "standard";
-    if (!dish.is_available) role = "waste-risk";
-    else if (stats.qty >= 2 && dish.margin_score >= 8) role = "star";
-    else if (stats.qty >= 2 && dish.margin_score < 6) role = "plowhorse";
-    else if (stats.qty === 0 && dish.margin_score >= 8) role = "puzzle";
-    else if (stats.qty === 0 && abandonedQty >= 3) role = "waste-risk";
+    const role = dishRole(dish, stats.qty, abandonedQty);
 
     return {
       id: dish.id,
@@ -558,8 +597,10 @@ export type AnalyticsInsights = {
 };
 
 function extractJsonObject(text: string) {
-  const fenced = text.match(/\{[\s\S]*\}/);
-  return fenced ? fenced[0] : text;
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end <= start) return text;
+  return text.slice(start, end + 1);
 }
 
 function insightLanguage(locale: AdminLocale) {

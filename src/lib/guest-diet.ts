@@ -67,6 +67,51 @@ export function inferDietFromText(text: string, current = emptyDietFilter()) {
   return next;
 }
 
+function dishBlob(dish: {
+  name: string;
+  description?: string | null;
+  ingredients?: string[] | null;
+  category?: string | null;
+}) {
+  return `${dish.name} ${dish.description ?? ""} ${(dish.ingredients ?? []).join(" ")} ${dish.category ?? ""}`.toLowerCase();
+}
+
+function allergenBlocked(blob: string, blocked: string[]) {
+  if (blocked.includes("nuts") && /ნიგვზ|walnut|орех|ნიგოზ|hazelnut|pistachio/.test(blob)) {
+    return true;
+  }
+  if (
+    blocked.includes("gluten") &&
+    /ხაჭაპურ|ხინკალ|პური|შოთი|khachapuri|khinkali|bread|gluten|мук|тесто/.test(blob)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function plantBasedBlocked(blob: string, diet: DietFilter) {
+  if (
+    (diet.vegan || diet.vegetarian) &&
+    /მწვად|ხინკალ|ქაბაბ|სტეიკ|chashushuli|მწვადი|mtsvadi|pork|beef|lamb|meat|ხორც|говяд|свин|баран/.test(
+      blob,
+    )
+  ) {
+    return true;
+  }
+  if (
+    diet.vegan &&
+    /ყველ|სულგუნ|რძ|კვერცხ|ხაჭაპურ|dairy|cheese|egg|sulguni|matsoni|йогурт|сыр/.test(
+      blob,
+    )
+  ) {
+    return true;
+  }
+  return (
+    (diet.vegetarian || diet.vegan) &&
+    /თევზ|კალმახ|fish|trout|shrimp|seafood|рыб/.test(blob)
+  );
+}
+
 export function dishMatchesDiet(
   dish: {
     name: string;
@@ -78,42 +123,10 @@ export function dishMatchesDiet(
   diet: DietFilter,
 ) {
   const listed = (dish.allergens ?? []).map((item) => item.toLowerCase());
-  for (const blocked of diet.blockedAllergens) {
-    if (listed.includes(blocked)) return false;
+  if (diet.blockedAllergens.some((blocked) => listed.includes(blocked))) {
+    return false;
   }
-
-  const blob = `${dish.name} ${dish.description ?? ""} ${(dish.ingredients ?? []).join(" ")} ${dish.category ?? ""}`.toLowerCase();
-
-  if (diet.blockedAllergens.includes("nuts")) {
-    if (/ნიგვზ|walnut|орех|ნიგოზ|hazelnut|pistachio/.test(blob)) return false;
-  }
-  if (diet.blockedAllergens.includes("gluten")) {
-    if (/ხაჭაპურ|ხინკალ|პური|შოთი|khachapuri|khinkali|bread|gluten|мук|тесто/.test(blob)) {
-      return false;
-    }
-  }
-
-  if (diet.vegan || diet.vegetarian) {
-    if (
-      /მწვად|ხინკალ|ქაბაბ|სტეიკ|chashushuli|მწვადი|mtsvadi|pork|beef|lamb|meat|ხორც|говяд|свин|баран/.test(
-        blob,
-      )
-    ) {
-      return false;
-    }
-  }
-  if (diet.vegan) {
-    if (
-      /ყველ|სულგუნ|რძ|კვერცხ|ხაჭაპურ|dairy|cheese|egg|sulguni|matsoni|йогурт|сыр/.test(
-        blob,
-      )
-    ) {
-      return false;
-    }
-  }
-  if (diet.vegetarian || diet.vegan) {
-    if (/თევზ|კალმახ|fish|trout|shrimp|seafood|рыб/.test(blob)) return false;
-  }
-
-  return true;
+  const blob = dishBlob(dish);
+  if (allergenBlocked(blob, diet.blockedAllergens)) return false;
+  return !plantBasedBlocked(blob, diet);
 }

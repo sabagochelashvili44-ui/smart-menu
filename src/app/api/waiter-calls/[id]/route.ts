@@ -9,6 +9,32 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+function parseWaiterPatch(body: { status?: string; items?: unknown }) {
+  const acknowledge = body.status === "acknowledged";
+  if (body.items === undefined) {
+    return { acknowledge, items: undefined as WaiterCallLine[] | undefined, error: null };
+  }
+  const sanitized = sanitizeWaiterCallItems(body.items);
+  if (sanitized === null) {
+    return { acknowledge, items: undefined, error: "Invalid items" };
+  }
+  return { acknowledge, items: sanitized, error: null };
+}
+
+function waiterPatch(
+  acknowledge: boolean,
+  items: WaiterCallLine[] | undefined,
+  withTimestamp: boolean,
+) {
+  const patch: Record<string, unknown> = {};
+  if (acknowledge) {
+    patch.status = "acknowledged";
+    if (withTimestamp) patch.acknowledged_at = new Date().toISOString();
+  }
+  if (items !== undefined) patch.items = items;
+  return patch;
+}
+
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -17,43 +43,32 @@ export async function PATCH(
   const tenant = await requireTenantApi();
   if (!tenant.ok) return tenant.response;
 
-  const body = (await request.json()) as { status?: string; items?: unknown };
-  const acknowledge = body.status === "acknowledged";
-  let items: WaiterCallLine[] | undefined;
-  if (body.items !== undefined) {
-    const sanitized = sanitizeWaiterCallItems(body.items);
-    if (sanitized === null) {
-      return NextResponse.json({ error: "Invalid items" }, { status: 400 });
-    }
-    items = sanitized;
+  const parsed = parseWaiterPatch(
+    (await request.json()) as { status?: string; items?: unknown },
+  );
+  if (parsed.error) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
+  const { acknowledge, items } = parsed;
   if (!acknowledge && items === undefined) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
   const supabase = createSupabaseAdminClient();
   const restaurantId = tenant.restaurant.id;
-  const waiterPatch: Record<string, unknown> = {};
-  if (acknowledge) {
-    waiterPatch.status = "acknowledged";
-    waiterPatch.acknowledged_at = new Date().toISOString();
-  }
-  if (items !== undefined) waiterPatch.items = items;
 
   let { data, error } = await supabase
     .from("waiter_calls")
-    .update(waiterPatch)
+    .update(waiterPatch(acknowledge, items, true))
     .eq("id", id)
     .eq("restaurant_id", restaurantId)
     .select("id, items, status")
     .maybeSingle();
 
   if (error && acknowledge) {
-    const retryPatch: Record<string, unknown> = { status: "acknowledged" };
-    if (items !== undefined) retryPatch.items = items;
     const retry = await supabase
       .from("waiter_calls")
-      .update(retryPatch)
+      .update(waiterPatch(true, items, false))
       .eq("id", id)
       .eq("restaurant_id", restaurantId)
       .select("id, items, status")

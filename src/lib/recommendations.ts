@@ -251,25 +251,19 @@ export function localExternalContext(now = new Date()): ExternalContext {
   };
 }
 
-function scoreCandidate(
-  dish: RecommendableDish,
-  category: string,
-  cart: {
-    redMeat: boolean;
-    fishPoultry: boolean;
-    mains: number;
-    hasAppetizer: boolean;
-    hasDessert: boolean;
-    quantity: number;
-    unique: number;
-  },
-  context: ExternalContext,
-) {
-  const blob = blobOf(dish, category);
+type CartAnalysis = {
+  redMeat: boolean;
+  fishPoultry: boolean;
+  mains: number;
+  hasAppetizer: boolean;
+  hasDessert: boolean;
+  quantity: number;
+  unique: number;
+};
+
+function pairingPoints(blob: string, cart: CartAnalysis, context: ExternalContext) {
   let score = 0;
   let pairing = false;
-  let chef = false;
-
   if (cart.redMeat && isRedWine(blob)) {
     score += 8;
     pairing = true;
@@ -278,7 +272,21 @@ function scoreCandidate(
     score += 8;
     pairing = true;
   }
+  if (context.hour >= 19 && isEveningDrink(blob)) {
+    score += 4;
+    pairing = true;
+  }
+  return { score, pairing };
+}
 
+function chefPoints(
+  blob: string,
+  category: string,
+  cart: CartAnalysis,
+  context: ExternalContext,
+) {
+  let score = 0;
+  let chef = false;
   if (cart.mains >= 2 && !cart.hasAppetizer && (isPlatter(blob) || isAppetizer(blob, category))) {
     score += 6;
     chef = true;
@@ -291,16 +299,10 @@ function scoreCandidate(
     score += 6;
     chef = true;
   }
-
   if (context.hour < 12 && isCoffeeOrJuice(blob)) {
     score += 4;
     chef = true;
   }
-  if (context.hour >= 19 && isEveningDrink(blob)) {
-    score += 4;
-    pairing = true;
-  }
-
   const temp = context.temperatureC ?? 16;
   if (temp > 25 && isHotWeather(blob)) {
     score += 5;
@@ -310,9 +312,51 @@ function scoreCandidate(
     score += 5;
     chef = true;
   }
+  return { score, chef };
+}
 
-  if (dish.image_url?.trim()) score += 0.2;
-  return { score, pairing, chef };
+function scoreCandidate(
+  dish: RecommendableDish,
+  category: string,
+  cart: CartAnalysis,
+  context: ExternalContext,
+) {
+  const blob = blobOf(dish, category);
+  const pairing = pairingPoints(blob, cart, context);
+  const chef = chefPoints(blob, category, cart, context);
+  return {
+    score: pairing.score + chef.score + (dish.image_url?.trim() ? 0.2 : 0),
+    pairing: pairing.pairing,
+    chef: chef.chef,
+  };
+}
+
+function analyzeCart(
+  dishes: RecommendableDish[],
+  categories: CategoryRef[],
+  cart: CartLine[],
+): CartAnalysis {
+  const analysis: CartAnalysis = {
+    redMeat: false,
+    fishPoultry: false,
+    mains: 0,
+    hasAppetizer: false,
+    hasDessert: false,
+    quantity: cart.reduce((sum, line) => sum + line.quantity, 0),
+    unique: cart.length,
+  };
+  for (const line of cart) {
+    const dish = dishes.find((item) => item.id === line.id);
+    if (!dish) continue;
+    const category = categoryName(dish, categories);
+    const blob = blobOf(dish, category);
+    if (isRedMeat(blob)) analysis.redMeat = true;
+    if (isFishOrPoultry(blob)) analysis.fishPoultry = true;
+    if (isMain(blob, category)) analysis.mains += line.quantity > 0 ? 1 : 0;
+    if (isAppetizer(blob, category)) analysis.hasAppetizer = true;
+    if (isDessert(blob, category)) analysis.hasDessert = true;
+  }
+  return analysis;
 }
 
 export function pickContextUpsells({
@@ -331,28 +375,7 @@ export function pickContextUpsells({
   limit?: number;
 }): UpsellResult {
   const inCart = new Set(cart.map((line) => line.id));
-  const quantity = cart.reduce((sum, line) => sum + line.quantity, 0);
-  const analysis = {
-    redMeat: false,
-    fishPoultry: false,
-    mains: 0,
-    hasAppetizer: false,
-    hasDessert: false,
-    quantity,
-    unique: cart.length,
-  };
-
-  for (const line of cart) {
-    const dish = dishes.find((item) => item.id === line.id);
-    if (!dish) continue;
-    const category = categoryName(dish, categories);
-    const blob = blobOf(dish, category);
-    if (isRedMeat(blob)) analysis.redMeat = true;
-    if (isFishOrPoultry(blob)) analysis.fishPoultry = true;
-    if (isMain(blob, category)) analysis.mains += line.quantity > 0 ? 1 : 0;
-    if (isAppetizer(blob, category)) analysis.hasAppetizer = true;
-    if (isDessert(blob, category)) analysis.hasDessert = true;
-  }
+  const analysis = analyzeCart(dishes, categories, cart);
 
   const ranked = dishes
     .filter((dish) => {

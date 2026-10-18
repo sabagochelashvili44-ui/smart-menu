@@ -15,7 +15,7 @@ const catalog = {
 const jsonPath = join(root, "data", "georgian-house-menu-150.json");
 writeFileSync(jsonPath, JSON.stringify(catalog, null, 2), "utf8");
 
-const jsonLiteral = JSON.stringify(catalog).replace(/'/g, "''");
+const jsonLiteral = JSON.stringify(catalog).replaceAll("'", "''");
 
 const sql = `-- Georgian House: 150 dishes (GEL) with Georgian names/descriptions
 -- Paste into Supabase → SQL Editor → Run

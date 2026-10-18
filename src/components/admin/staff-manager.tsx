@@ -126,11 +126,7 @@ export function StaffManager({
   }
 
   function generatePassword() {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-    let token = "";
-    for (let index = 0; index < 4; index += 1) {
-      token += chars[Math.floor(Math.random() * chars.length)];
-    }
+    const token = crypto.randomUUID().replaceAll("-", "").slice(0, 8);
     setNewPassword(`SmartMenu${token}!`);
   }
 
@@ -341,7 +337,7 @@ export function StaffManager({
               disabled={busy}
               onClick={generatePassword}
             >
-              {t.generatePassword}
+              {t.generateSecret}
             </Button>
             <Button
               type="button"

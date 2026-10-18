@@ -617,7 +617,14 @@ export function KitchenBoard({
 
   return (
     <div className="space-y-3">
-      <audio ref={chimeRef} src={CHIME_URL} preload="auto" className="hidden" />
+      <audio ref={chimeRef} src={CHIME_URL} preload="auto" className="hidden">
+        <track
+          kind="captions"
+          src="/chime-captions.vtt"
+          srcLang="en"
+          label="English"
+        />
+      </audio>
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button
           type="button"
